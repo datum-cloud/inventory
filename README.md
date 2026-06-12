@@ -26,12 +26,34 @@ exposes it as `datumctl inventory`.
 | `datumctl inventory nodes [--region R] [--site S] [--cluster C]` | List nodes |
 | `datumctl inventory tree [--region R]` | region → site → node hierarchy |
 | `datumctl inventory summary` | Fleet-wide counts |
+| `datumctl inventory apply -f FILE [--dry-run=server]` | Create/update objects from a manifest |
 
-All subcommands accept `-o table|json|yaml` (default `table`).
+The list subcommands accept `-o table|json|yaml` (default `table`).
 
 `--region`, `--site`, and `--cluster` filter server-side using the
 `topology.inventory.miloapis.com/*` labels the inventory controllers propagate
 onto objects. `--provider` filters on the site's `providerRef`.
+
+## Populating the inventory
+
+`apply` is an idempotent, declarative upsert for inventory objects — for
+loading the inventory from declared configuration, not fleet management:
+
+```sh
+# Apply a manifest (objects land in dependency order: provider, region,
+# site, cluster, node — regardless of order in the file)
+datumctl inventory apply -f fleet.yaml
+
+# Pipe from a renderer
+render-fleet | datumctl inventory apply -f -
+
+# Validate against the server without persisting
+datumctl inventory apply -f fleet.yaml --dry-run=server
+```
+
+It uses server-side apply with field manager `datumctl-inventory`, so
+re-applying the same manifest makes no changes. Only `Provider`, `Region`,
+`Site`, `Cluster`, and `Node` are accepted.
 
 Inventory objects are cluster-scoped on the Datum Cloud platform root, so the
 plugin talks to the platform API directly and takes no organization or project

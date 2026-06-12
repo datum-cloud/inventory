@@ -64,6 +64,7 @@ platform API directly; they do not take an organization or project scope.`,
 		newListCmd(nodesView),
 		newTreeCmd(),
 		newSummaryCmd(),
+		newApplyCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
