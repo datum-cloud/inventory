@@ -11,7 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"go.datum.net/datumctl/plugin"
-	inventoryv1alpha1 "go.miloapis.com/inventory/api/v1alpha1"
+	inventoryv1alpha2 "go.miloapis.com/inventory/api/v1alpha2"
 )
 
 // newClient builds a controller-runtime client against the Datum Cloud platform
@@ -33,7 +33,7 @@ func newClient() (client.Client, error) {
 	}
 
 	scheme := runtime.NewScheme()
-	if err := inventoryv1alpha1.AddToScheme(scheme); err != nil {
+	if err := inventoryv1alpha2.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("build scheme: %w", err)
 	}
 
