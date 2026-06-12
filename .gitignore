@@ -1,0 +1,4 @@
+# build artifacts
+/datumctl-inventory
+/dist/
+/inventory
