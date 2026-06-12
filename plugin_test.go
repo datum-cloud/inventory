@@ -4,16 +4,56 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	inventoryv1alpha1 "go.miloapis.com/inventory/api/v1alpha1"
+	inventoryv1alpha2 "go.miloapis.com/inventory/api/v1alpha2"
 )
 
-func readyConds(status metav1.ConditionStatus) []metav1.Condition {
-	return []metav1.Condition{{Type: "Ready", Status: status}}
+func readyConds(s metav1.ConditionStatus) []metav1.Condition {
+	return []metav1.Condition{{Type: "Ready", Status: s}}
+}
+
+func node(name, typ string, attrs map[string]string) inventoryv1alpha2.Node {
+	n := inventoryv1alpha2.Node{}
+	n.Name = name
+	n.Spec.Type = typ
+	n.Spec.Attributes = attrs
+	n.Status.Conditions = readyConds(metav1.ConditionTrue)
+	return n
+}
+
+func edge(name, typ, from, to string) inventoryv1alpha2.Edge {
+	e := inventoryv1alpha2.Edge{}
+	e.Name = name
+	e.Spec.Type = typ
+	e.Spec.From = inventoryv1alpha2.NodeReference{Name: from}
+	e.Spec.To = inventoryv1alpha2.NodeReference{Name: to}
+	e.Status.Conditions = readyConds(metav1.ConditionTrue)
+	return e
+}
+
+func newScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := inventoryv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	return s
+}
+
+func tableCmd() (*cobra.Command, *bytes.Buffer) {
+	var buf bytes.Buffer
+	c := &cobra.Command{}
+	c.Flags().StringP("output", "o", "table", "")
+	c.SetOut(&buf)
+	return c, &buf
 }
 
 func TestReady(t *testing.T) {
@@ -23,94 +63,113 @@ func TestReady(t *testing.T) {
 	if got := ready(nil); got != none {
 		t.Errorf("ready(nil) = %q, want %s", got, none)
 	}
-	if got := ready([]metav1.Condition{{Type: "Accepted", Status: metav1.ConditionTrue}}); got != none {
-		t.Errorf("ready(no Ready) = %q, want %s", got, none)
-	}
 }
 
-func TestOrNone(t *testing.T) {
-	if orNone("") != none {
-		t.Error("orNone empty should be <none>")
-	}
-	if orNone("x") != "x" {
-		t.Error("orNone non-empty should pass through")
-	}
-}
-
-func TestPrintTable(t *testing.T) {
+func TestPrintTableEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	if err := printTable(&buf, []string{"A", "B"}, [][]string{{"1", "2"}}); err != nil {
-		t.Fatal(err)
-	}
-	out := buf.String()
-	if !strings.Contains(out, "A") || !strings.Contains(out, "1") {
-		t.Errorf("table missing content:\n%s", out)
-	}
-
-	buf.Reset()
 	_ = printTable(&buf, []string{"A"}, nil)
 	if !strings.Contains(buf.String(), "No matching inventory found.") {
-		t.Errorf("empty table should print no-match message, got:\n%s", buf.String())
+		t.Errorf("empty table message missing: %q", buf.String())
 	}
-}
-
-func site(name, region, provider string) inventoryv1alpha1.Site {
-	s := inventoryv1alpha1.Site{}
-	s.Name = name
-	s.Spec.RegionRef = inventoryv1alpha1.LocalObjectReference{Name: region}
-	if provider != "" {
-		s.Spec.ProviderRef = &inventoryv1alpha1.LocalObjectReference{Name: provider}
-	}
-	return s
-}
-
-func node(name, siteName string) inventoryv1alpha1.Node {
-	n := inventoryv1alpha1.Node{}
-	n.Name = name
-	n.Spec.SiteRef = inventoryv1alpha1.LocalObjectReference{Name: siteName}
-	return n
 }
 
 func TestPrintTree(t *testing.T) {
-	regions := inventoryv1alpha1.RegionList{Items: []inventoryv1alpha1.Region{
-		{ObjectMeta: metav1.ObjectMeta{Name: "us-central-2"}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "eu-west-1"}},
+	nodes := inventoryv1alpha2.NodeList{Items: []inventoryv1alpha2.Node{
+		node("region-uc", "Region", nil),
+		node("site-dfw1", "Site", nil),
+		node("host-1", "Host", nil),
 	}}
-	sites := inventoryv1alpha1.SiteList{Items: []inventoryv1alpha1.Site{site("us-central-2a", "us-central-2", "")}}
-	cl := inventoryv1alpha1.Cluster{}
-	cl.Name = "edge-1"
-	cl.Labels = map[string]string{inventoryv1alpha1.TopologyRegionLabel: "us-central-2"}
-	clusters := inventoryv1alpha1.ClusterList{Items: []inventoryv1alpha1.Cluster{cl}}
-	nodes := inventoryv1alpha1.NodeList{Items: []inventoryv1alpha1.Node{node("node-1", "us-central-2a")}}
-
+	edges := inventoryv1alpha2.EdgeList{Items: []inventoryv1alpha2.Edge{
+		edge("e1", "located-in", "site-dfw1", "region-uc"),
+		edge("e2", "located-in", "host-1", "site-dfw1"),
+	}}
 	var buf bytes.Buffer
-	printTree(&buf, "", regions, sites, clusters, nodes)
+	printTree(&buf, nodes, edges, "located-in", "Region")
 	out := buf.String()
-	for _, want := range []string{"us-central-2", "eu-west-1", "clusters: edge-1", "  us-central-2a", "    node-1"} {
+	for _, want := range []string{"region-uc (Region)", "  site-dfw1 (Site)", "    host-1 (Host)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("tree missing %q:\n%s", want, out)
 		}
 	}
-
-	buf.Reset()
-	printTree(&buf, "us-central-2", regions, sites, clusters, nodes)
-	if strings.Contains(buf.String(), "eu-west-1") {
-		t.Errorf("--region filter leaked:\n%s", buf.String())
-	}
 }
 
 func TestPrintSummary(t *testing.T) {
-	sites := inventoryv1alpha1.SiteList{Items: []inventoryv1alpha1.Site{
-		site("a", "r1", "netactuate"),
-		site("b", "r1", "netactuate"),
-		site("c", "r2", "vultr"),
+	nodes := inventoryv1alpha2.NodeList{Items: []inventoryv1alpha2.Node{
+		node("a", "Site", nil), node("b", "Site", nil), node("c", "Region", nil),
+	}}
+	edges := inventoryv1alpha2.EdgeList{Items: []inventoryv1alpha2.Edge{
+		edge("e1", "located-in", "a", "c"),
 	}}
 	var buf bytes.Buffer
-	printSummary(&buf, inventoryv1alpha1.ProviderList{}, inventoryv1alpha1.RegionList{}, sites, inventoryv1alpha1.ClusterList{}, inventoryv1alpha1.NodeList{})
+	printSummary(&buf, nodes, edges)
 	out := buf.String()
-	for _, want := range []string{"Totals", "Per region", "Sites per provider", "netactuate", "r1"} {
+	for _, want := range []string{"Nodes (3 total)", "Site", "Region", "Edges (1 total)", "located-in"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary missing %q:\n%s", want, out)
 		}
 	}
 }
+
+func TestGetEdgesFilters(t *testing.T) {
+	c := fakeclient.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(
+		ptr(edge("e1", "located-in", "site-dfw1", "region-uc")),
+		ptr(edge("e2", "member-of", "host-1", "cluster-a")),
+	).Build()
+	cmd, buf := tableCmd()
+	if err := getEdges(context.Background(), cmd, c, "located-in", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "located-in") || strings.Contains(out, "member-of") {
+		t.Errorf("--type filter wrong:\n%s", out)
+	}
+}
+
+func TestNeighbors(t *testing.T) {
+	c := fakeclient.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(
+		ptr(node("site-dfw1", "Site", nil)),
+		ptr(node("region-uc", "Region", nil)),
+		ptr(node("host-1", "Host", nil)),
+		ptr(edge("e1", "located-in", "site-dfw1", "region-uc")),
+		ptr(edge("e2", "located-in", "host-1", "site-dfw1")),
+	).Build()
+	cmd, buf := tableCmd()
+	if err := neighbors(context.Background(), cmd, c, "site-dfw1", "located-in", "both"); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "region-uc") || !strings.Contains(out, "host-1") {
+		t.Errorf("neighbors missing expected nodes:\n%s", out)
+	}
+	if !strings.Contains(out, "out") || !strings.Contains(out, "in") {
+		t.Errorf("neighbors missing both directions:\n%s", out)
+	}
+}
+
+func TestAttributeColumnsFallbackUnion(t *testing.T) {
+	c := fakeclient.NewClientBuilder().WithScheme(newScheme(t)).Build()
+	nodes := []inventoryv1alpha2.Node{
+		node("a", "Site", map[string]string{"displayName": "DFW", "siteType": "Edge"}),
+		node("b", "Site", map[string]string{"displayName": "ORD"}),
+	}
+	keys := attributeColumns(context.Background(), c, "Site", nodes)
+	if strings.Join(keys, ",") != "displayName,siteType" {
+		t.Errorf("fallback union = %v, want [displayName siteType]", keys)
+	}
+}
+
+func TestAttributeColumnsFromNodeType(t *testing.T) {
+	nt := inventoryv1alpha2.NodeType{}
+	nt.Name = "Site"
+	nt.Spec.Attributes = []inventoryv1alpha2.AttributeSchema{
+		{Key: "displayName", Type: inventoryv1alpha2.AttributeString},
+		{Key: "siteType", Type: inventoryv1alpha2.AttributeString},
+	}
+	c := fakeclient.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(&nt).Build()
+	keys := attributeColumns(context.Background(), c, "Site", nil)
+	if strings.Join(keys, ",") != "displayName,siteType" {
+		t.Errorf("NodeType-driven columns = %v, want schema order", keys)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

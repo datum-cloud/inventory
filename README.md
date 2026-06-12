@@ -1,10 +1,12 @@
 # datumctl-inventory
 
-A [datumctl](https://github.com/datum-cloud/datumctl) plugin that provides a
-read view over the Datum Cloud physical inventory — providers, regions, sites,
-clusters, and nodes — served by the [milo inventory
-service](https://github.com/milo-os/inventory) (`inventory.miloapis.com/v1alpha1`).
-Once installed it is invoked as `datumctl inventory ...`.
+A [datumctl](https://github.com/datum-cloud/datumctl) plugin for the Datum Cloud
+inventory, modeled as a **property graph**: typed `Node`s (Region, Site,
+Cluster, Provider, Host, …) connected by typed `Edge`s (located-in, member-of,
+provided-by, …), each carrying an attribute bag. The available types and their
+attributes live in the `NodeType`/`EdgeType` schema registry. Served by the
+[milo inventory service](https://github.com/milo-os/inventory)
+(`graph.inventory.miloapis.com/v1alpha2`). Invoked as `datumctl inventory ...`.
 
 ## Install
 
@@ -19,41 +21,40 @@ exposes it as `datumctl inventory`.
 
 | Command | Description |
 |---|---|
-| `datumctl inventory providers` | List providers |
-| `datumctl inventory regions` | List regions |
-| `datumctl inventory sites [--region R] [--provider P]` | List sites |
-| `datumctl inventory clusters [--region R] [--site S]` | List clusters |
-| `datumctl inventory nodes [--region R] [--site S] [--cluster C]` | List nodes |
-| `datumctl inventory tree [--region R]` | region → site → node hierarchy |
-| `datumctl inventory summary` | Fleet-wide counts |
-| `datumctl inventory apply -f FILE [--dry-run=server]` | Create/update objects from a manifest |
+| `datumctl inventory get <TYPE>` | List nodes of an asset class; columns derived from the NodeType schema |
+| `datumctl inventory get edges [--type T] [--from N] [--to N]` | List edges (relationships) |
+| `datumctl inventory types` | List the NodeType/EdgeType schema registry |
+| `datumctl inventory neighbors NODE [--edge T] [--direction out\|in\|both]` | Nodes adjacent to NODE |
+| `datumctl inventory tree [--edge T] [--root-type T]` | Containment hierarchy from edges (default: `located-in`, rooted at `Region`) |
+| `datumctl inventory summary` | Counts per node type and edge type |
+| `datumctl inventory apply -f FILE [--dry-run=server]` | Create/update graph objects from a manifest |
 
-The list subcommands accept `-o table|json|yaml` (default `table`).
+The `get`, `types`, `summary` commands accept `-o table|json|yaml` (default `table`).
 
-`--region`, `--site`, and `--cluster` filter server-side using the
-`topology.inventory.miloapis.com/*` labels the inventory controllers propagate
-onto objects. `--provider` filters on the site's `providerRef`.
+Relationships that were typed fields in the old model (a site's region, a
+node's cluster) are now **edges** — query them with `get edges`, `neighbors`,
+or `tree` rather than as columns.
 
 ## Populating the inventory
 
-`apply` is an idempotent, declarative upsert for inventory objects — for
-loading the inventory from declared configuration, not fleet management:
+`apply` is an idempotent, declarative upsert of graph objects — for loading the
+inventory from declared configuration, not fleet management:
 
 ```sh
-# Apply a manifest (objects land in dependency order: provider, region,
-# site, cluster, node — regardless of order in the file)
-datumctl inventory apply -f fleet.yaml
+# Apply a manifest (objects land in dependency order: node/edge types first,
+# then nodes, then edges — regardless of order in the file)
+datumctl inventory apply -f graph.yaml
 
 # Pipe from a renderer
 render-fleet | datumctl inventory apply -f -
 
 # Validate against the server without persisting
-datumctl inventory apply -f fleet.yaml --dry-run=server
+datumctl inventory apply -f graph.yaml --dry-run=server
 ```
 
 It uses server-side apply with field manager `datumctl-inventory`, so
-re-applying the same manifest makes no changes. Only `Provider`, `Region`,
-`Site`, `Cluster`, and `Node` are accepted.
+re-applying the same manifest makes no changes. Only `NodeType`, `EdgeType`,
+`Node`, and `Edge` are accepted.
 
 Inventory objects are cluster-scoped on the Datum Cloud platform root, so the
 plugin talks to the platform API directly and takes no organization or project
@@ -65,7 +66,7 @@ datumctl injects context via environment variables and execs the plugin. The
 plugin reads `DATUM_API_HOST`, fetches a short-lived token through the
 credentials helper (`plugin.Token()`), and builds a controller-runtime client
 against the platform root using the milo inventory project's published typed
-API (`go.miloapis.com/inventory/api/v1alpha1`). See the
+API (`go.miloapis.com/inventory/api/v1alpha2`). See the
 [datumctl plugin docs](https://github.com/datum-cloud/datumctl/blob/main/docs/developer/plugins.md).
 
 This split keeps Datum's CLI surface in `datum-cloud/` while depending on the

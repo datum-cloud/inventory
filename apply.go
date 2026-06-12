@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,19 +12,20 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	inventoryv1alpha1 "go.miloapis.com/inventory/api/v1alpha1"
+	inventoryv1alpha2 "go.miloapis.com/inventory/api/v1alpha2"
 )
 
 const fieldManager = "datumctl-inventory"
 
-// applyOrder lists the inventory kinds apply handles, in dependency order:
-// parents are applied before the children that reference them.
-var applyOrder = []string{"Provider", "Region", "Site", "Cluster", "Node"}
+// applyOrder lists the graph kinds apply handles, in dependency order: the
+// type registry first, then nodes, then the edges that reference nodes.
+var applyOrder = []string{"NodeType", "EdgeType", "Node", "Edge"}
 
 func kindOrder(kind string) (int, bool) {
 	for i, k := range applyOrder {
@@ -39,14 +41,14 @@ func newApplyCmd() *cobra.Command {
 	var dryRun string
 	cmd := &cobra.Command{
 		Use:   "apply -f FILE",
-		Short: "Create or update inventory objects from a manifest",
-		Long: `Create or update inventory objects (providers, regions, sites, clusters,
-nodes) from a YAML or JSON manifest.
+		Short: "Create or update inventory graph objects from a manifest",
+		Long: `Create or update inventory graph objects (NodeType, EdgeType, Node, Edge)
+from a YAML or JSON manifest.
 
 apply is an idempotent, declarative upsert: re-applying the same manifest makes
-no changes. Objects are applied in dependency order (providers, then regions,
-then sites, then clusters, then nodes) so a single mixed manifest lands cleanly.
-It uses server-side apply with field manager "datumctl-inventory".
+no changes. Objects are applied in dependency order (node/edge types first, then
+nodes, then the edges that reference them) so a single mixed manifest lands
+cleanly. It uses server-side apply with field manager "datumctl-inventory".
 
 This is for populating the inventory from declared configuration — not fleet
 management. Inventory lives on the Datum Cloud platform root, so apply takes no
@@ -106,7 +108,7 @@ type applyObj struct {
 // kinds apply does not handle.
 func readManifests(stdin io.Reader, files []string) ([]applyObj, error) {
 	scheme := runtime.NewScheme()
-	if err := inventoryv1alpha1.AddToScheme(scheme); err != nil {
+	if err := inventoryv1alpha2.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("build scheme: %w", err)
 	}
 	decoder := serializer.NewCodecFactory(scheme).UniversalDeserializer()
@@ -130,15 +132,22 @@ func readManifests(stdin io.Reader, files []string) ([]applyObj, error) {
 			if len(raw.Raw) == 0 {
 				continue
 			}
+			// Check the kind before typed decode so an unsupported kind gets a
+			// helpful message rather than the scheme's "not registered" error.
+			var tm metav1.TypeMeta
+			if derr := json.Unmarshal(raw.Raw, &tm); derr != nil {
+				closeFn()
+				return nil, fmt.Errorf("parse %s: %w", f, derr)
+			}
+			order, ok := kindOrder(tm.Kind)
+			if !ok {
+				closeFn()
+				return nil, fmt.Errorf("unsupported kind %q in %s (apply handles: %s)", tm.Kind, f, strings.Join(applyOrder, ", "))
+			}
 			obj, gvk, derr := decoder.Decode(raw.Raw, nil, nil)
 			if derr != nil {
 				closeFn()
 				return nil, fmt.Errorf("decode %s: %w", f, derr)
-			}
-			order, ok := kindOrder(gvk.Kind)
-			if !ok {
-				closeFn()
-				return nil, fmt.Errorf("unsupported kind %q in %s (apply handles: %s)", gvk.Kind, f, strings.Join(applyOrder, ", "))
 			}
 			co, ok := obj.(client.Object)
 			if !ok {

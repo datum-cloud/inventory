@@ -10,118 +10,61 @@ import (
 
 	"github.com/spf13/cobra"
 
-	inventoryv1alpha1 "go.miloapis.com/inventory/api/v1alpha1"
+	inventoryv1alpha2 "go.miloapis.com/inventory/api/v1alpha2"
 )
 
 func newSummaryCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "summary",
-		Short: "Show fleet-wide inventory counts",
-		Long: `Print fleet-wide counts: totals per kind, sites and nodes per region, and
-sites per provider.`,
-		Example:      "  datumctl inventory summary",
-		Args:         cobra.NoArgs,
-		SilenceUsage: true,
+		Use:     "summary",
+		Short:   "Show fleet-wide inventory counts",
+		Long:    `Print fleet-wide counts: nodes per node type and edges per edge type.`,
+		Example: `  datumctl inventory summary`,
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := newClient()
 			if err != nil {
 				return err
 			}
 			ctx := cmd.Context()
-
-			var providers inventoryv1alpha1.ProviderList
-			var regions inventoryv1alpha1.RegionList
-			var sites inventoryv1alpha1.SiteList
-			var clusters inventoryv1alpha1.ClusterList
-			var nodes inventoryv1alpha1.NodeList
-			if err := c.List(ctx, &providers); err != nil {
-				return listErr("providers", err)
-			}
-			if err := c.List(ctx, &regions); err != nil {
-				return listErr("regions", err)
-			}
-			if err := c.List(ctx, &sites); err != nil {
-				return listErr("sites", err)
-			}
-			if err := c.List(ctx, &clusters); err != nil {
-				return listErr("clusters", err)
-			}
+			var nodes inventoryv1alpha2.NodeList
 			if err := c.List(ctx, &nodes); err != nil {
 				return listErr("nodes", err)
 			}
-
-			printSummary(cmd.OutOrStdout(), providers, regions, sites, clusters, nodes)
+			var edges inventoryv1alpha2.EdgeList
+			if err := c.List(ctx, &edges); err != nil {
+				return listErr("edges", err)
+			}
+			printSummary(cmd.OutOrStdout(), nodes, edges)
 			return nil
 		},
 	}
 }
 
-func printSummary(out io.Writer, providers inventoryv1alpha1.ProviderList, regions inventoryv1alpha1.RegionList, sites inventoryv1alpha1.SiteList, clusters inventoryv1alpha1.ClusterList, nodes inventoryv1alpha1.NodeList) {
-	fmt.Fprintln(out, "Totals")
-	_ = printTable(out, []string{"KIND", "COUNT"}, [][]string{
-		{"providers", strconv.Itoa(len(providers.Items))},
-		{"regions", strconv.Itoa(len(regions.Items))},
-		{"sites", strconv.Itoa(len(sites.Items))},
-		{"clusters", strconv.Itoa(len(clusters.Items))},
-		{"nodes", strconv.Itoa(len(nodes.Items))},
-	})
-
-	sitesPerRegion := map[string]int{}
-	for _, s := range sites.Items {
-		sitesPerRegion[s.Spec.RegionRef.Name]++
-	}
-	nodesPerRegion := map[string]int{}
+func printSummary(out io.Writer, nodes inventoryv1alpha2.NodeList, edges inventoryv1alpha2.EdgeList) {
+	nodeByType := map[string]int{}
 	for _, n := range nodes.Items {
-		r := n.Labels[inventoryv1alpha1.TopologyRegionLabel]
-		if r == "" {
-			r = none
-		}
-		nodesPerRegion[r]++
+		nodeByType[n.Spec.Type]++
 	}
-	fmt.Fprintln(out, "\nPer region")
-	regionRows := make([][]string, 0)
-	for _, r := range sortedUnion(sitesPerRegion, nodesPerRegion) {
-		regionRows = append(regionRows, []string{r, strconv.Itoa(sitesPerRegion[r]), strconv.Itoa(nodesPerRegion[r])})
+	edgeByType := map[string]int{}
+	for _, e := range edges.Items {
+		edgeByType[e.Spec.Type]++
 	}
-	_ = printTable(out, []string{"REGION", "SITES", "NODES"}, regionRows)
 
-	sitesPerProvider := map[string]int{}
-	for _, s := range sites.Items {
-		p := none
-		if s.Spec.ProviderRef != nil {
-			p = s.Spec.ProviderRef.Name
-		}
-		sitesPerProvider[p]++
-	}
-	fmt.Fprintln(out, "\nSites per provider")
-	providerRows := make([][]string, 0)
-	for _, p := range sortedKeys(sitesPerProvider) {
-		providerRows = append(providerRows, []string{p, strconv.Itoa(sitesPerProvider[p])})
-	}
-	_ = printTable(out, []string{"PROVIDER", "SITES"}, providerRows)
+	fmt.Fprintf(out, "Nodes (%d total)\n", len(nodes.Items))
+	_ = printTable(out, []string{"NODE-TYPE", "COUNT"}, countRows(nodeByType))
+	fmt.Fprintf(out, "\nEdges (%d total)\n", len(edges.Items))
+	_ = printTable(out, []string{"EDGE-TYPE", "COUNT"}, countRows(edgeByType))
 }
 
-func sortedKeys(m map[string]int) []string {
+func countRows(m map[string]int) [][]string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	return keys
-}
-
-func sortedUnion(a, b map[string]int) []string {
-	seen := map[string]bool{}
-	for k := range a {
-		seen[k] = true
+	rows := make([][]string, 0, len(keys))
+	for _, k := range keys {
+		rows = append(rows, []string{k, strconv.Itoa(m[k])})
 	}
-	for k := range b {
-		seen[k] = true
-	}
-	keys := make([]string, 0, len(seen))
-	for k := range seen {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return rows
 }

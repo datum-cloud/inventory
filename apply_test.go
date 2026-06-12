@@ -9,35 +9,32 @@ import (
 )
 
 const sampleManifest = `
-apiVersion: inventory.miloapis.com/v1alpha1
+apiVersion: graph.inventory.miloapis.com/v1alpha2
+kind: Edge
+metadata:
+  name: site-dfw1-in-uc
+spec:
+  type: located-in
+  from:
+    name: site-dfw1
+  to:
+    name: region-uc
+---
+apiVersion: graph.inventory.miloapis.com/v1alpha2
+kind: NodeType
+metadata:
+  name: Site
+spec:
+  displayName: Site
+---
+apiVersion: graph.inventory.miloapis.com/v1alpha2
 kind: Node
 metadata:
-  name: node-a
+  name: site-dfw1
 spec:
-  siteRef:
-    name: us-central-1a
-  hardware:
-    cpuCores: 8
-    cpuArchitecture: amd64
-    memoryBytes: 1073741824
----
-apiVersion: inventory.miloapis.com/v1alpha1
-kind: Provider
-metadata:
-  name: netactuate
-spec:
-  displayName: NetActuate
-  type: Hosting
----
-apiVersion: inventory.miloapis.com/v1alpha1
-kind: Site
-metadata:
-  name: us-central-1a
-spec:
-  displayName: Dallas
-  type: AvailabilityZone
-  regionRef:
-    name: us-central-1
+  type: Site
+  attributes:
+    displayName: Dallas
 `
 
 func TestReadManifestsParsesAndOrders(t *testing.T) {
@@ -49,14 +46,13 @@ func TestReadManifestsParsesAndOrders(t *testing.T) {
 		t.Fatalf("got %d objects, want 3", len(objs))
 	}
 	sort.SliceStable(objs, func(i, j int) bool { return objs[i].order < objs[j].order })
-	gotKinds := []string{objs[0].kind, objs[1].kind, objs[2].kind}
-	want := []string{"Provider", "Site", "Node"}
+	got := []string{objs[0].kind, objs[1].kind, objs[2].kind}
+	want := []string{"NodeType", "Node", "Edge"}
 	for i := range want {
-		if gotKinds[i] != want[i] {
-			t.Errorf("order[%d] = %s, want %s (full: %v)", i, gotKinds[i], want[i], gotKinds)
+		if got[i] != want[i] {
+			t.Errorf("order[%d] = %s, want %s (full: %v)", i, got[i], want[i], got)
 		}
 	}
-	// GVK must be set on each object so server-side apply has apiVersion/kind.
 	for _, o := range objs {
 		if o.obj.GetObjectKind().GroupVersionKind().Kind == "" {
 			t.Errorf("%s/%s missing GVK", o.kind, o.obj.GetName())
@@ -66,10 +62,10 @@ func TestReadManifestsParsesAndOrders(t *testing.T) {
 
 func TestReadManifestsRejectsUnsupportedKind(t *testing.T) {
 	const m = `
-apiVersion: inventory.miloapis.com/v1alpha1
-kind: Rack
+apiVersion: graph.inventory.miloapis.com/v1alpha2
+kind: Widget
 metadata:
-  name: rack-a
+  name: w
 `
 	_, err := readManifests(strings.NewReader(m), []string{"-"})
 	if err == nil || !strings.Contains(err.Error(), "unsupported kind") {
@@ -88,15 +84,18 @@ func TestReadManifestsEmpty(t *testing.T) {
 }
 
 func TestKindOrder(t *testing.T) {
-	if _, ok := kindOrder("Provider"); !ok {
-		t.Error("Provider should be ordered")
+	nt, ok := kindOrder("NodeType")
+	if !ok {
+		t.Fatal("NodeType should be ordered")
 	}
-	p, _ := kindOrder("Provider")
-	n, _ := kindOrder("Node")
-	if !(p < n) {
-		t.Errorf("Provider (%d) should sort before Node (%d)", p, n)
+	e, ok := kindOrder("Edge")
+	if !ok {
+		t.Fatal("Edge should be ordered")
 	}
-	if _, ok := kindOrder("Rack"); ok {
-		t.Error("Rack should not be applyable")
+	if !(nt < e) {
+		t.Errorf("NodeType (%d) should sort before Edge (%d)", nt, e)
+	}
+	if _, ok := kindOrder("Widget"); ok {
+		t.Error("Widget should not be applyable")
 	}
 }
