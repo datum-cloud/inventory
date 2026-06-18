@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/spf13/cobra v1.10.2
 	go.datum.net/datumctl v0.15.0
-	go.miloapis.com/inventory v0.1.0
+	go.miloapis.com/inventory v0.1.3
 	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.36.2
 	sigs.k8s.io/controller-runtime v0.23.3
