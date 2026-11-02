@@ -1,5 +1,8 @@
 # datumctl-inventory
 
+> [!CAUTION]
+> **Deprecated.** This repository is archived and no longer maintained. Datum's physical inventory now lives in [datum-cloud/fleet](https://github.com/datum-cloud/fleet). The `inventory.miloapis.com` API and the `datumctl inventory` plugin are no longer deployed.
+
 A [datumctl](https://github.com/datum-cloud/datumctl) plugin for the Datum Cloud
 inventory, modeled as a **property graph**: typed `Node`s (Region, Site,
 Cluster, Provider, Host, …) connected by typed `Edge`s (located-in, member-of,
